@@ -2,21 +2,23 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from collections import defaultdict
-
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from mpl_toolkits.mplot3d import Axes3D
 
-from easy21 import run_episode, Action
-from policy import default_dealer_policy
-from policy import naive_player
-from policy import MonteCarlo
+from easy21 import run_monte_carlo, run_sarsa, q_fn_to_value_fn
 
 
-def plot_states(stats):
-    dealer_cards = [dealer_card for (dealer_card, _) in stats.keys()]
-    player_sums = [player_sum for (_, player_sum) in stats.keys()]
+def plot_rewards(rewards):
+    df = pd.DataFrame(rewards)
+    df.rolling(10000).mean().plot(x='episode', y='reward', kind='line')
+    plt.show()
+
+
+def plot_value_function(value_function):
+    dealer_cards = [dealer_card for (dealer_card, _) in value_function.keys()]
+    player_sums = [player_sum for (_, player_sum) in value_function.keys()]
 
     min_dealer_cards = min(dealer_cards)
     x = np.arange(min_dealer_cards, max(dealer_cards) + 1, 1, dtype=np.int32)
@@ -24,12 +26,8 @@ def plot_states(stats):
     min_player_sum = min(player_sums)
     y = np.arange(min_player_sum, max(player_sums) + 1, 1, dtype=np.int32)
 
-    def reward_fn(dealer_card, player_sum):
-        r, c = stats[(dealer_card, player_sum)]
-        return r / c if c > 0 else 0
-
     x, y = np.meshgrid(x, y)
-    rewards = [reward_fn(dealer_card, player_sum) for dealer_card, player_sum in zip(np.ravel(x), np.ravel(y))]
+    rewards = [value_function[(dealer_card, player_sum)] for dealer_card, player_sum in zip(np.ravel(x), np.ravel(y))]
     z = np.array(rewards).reshape(x.shape)
 
     fig = plt.figure()
@@ -41,29 +39,25 @@ def plot_states(stats):
     plt.show()
 
 
-def main(n):
-    stats = defaultdict(lambda: (0.0, 0))
-    player = MonteCarlo(discount_factor=1, actions=[Action.STICK, Action.HIT])
-    for _ in range(n):
-        traces, reward = run_episode(default_dealer_policy, player)
-        # print(reward, traces)
-        dealer_card = traces[0].dealer_sum
-        for state in traces:
-            if not state.is_terminal:
-                s = stats[(dealer_card, state.player_sum)]
-                stats[(dealer_card, state.player_sum)] = (s[0] + reward, s[1] + 1)
-    # player.update_q()
-    # for i in player.trajectory:
-    #     print(i)
-    # for i in player.rewards.items():
-    #     print('rrr', i)
-    # print('zzz', player.trajectory[-1])
-    # for i in player.Q.items():
-    #     print('qqq', i)
-    # for i in player.trajectory.items():
-    #     print(i)
-    plot_states(stats)
+def compare_mse():
+    _, mc_q = run_monte_carlo(1_000_000)
+    plot_value_function(q_fn_to_value_fn(mc_q))
+
+    rows = []
+    for l in (x * 0.1 for x in range(0, 10)):
+        _, sarsa_q = run_sarsa(100_000, l)
+        mse = 0
+        for k in (mc_q.keys() | sarsa_q.keys()):
+            mse += (mc_q[k] - sarsa_q[k]) ** 2
+        row = {'lmbda': l, 'mse': mse}
+        rows.append(row)
+        print(row)
+        plot_value_function(q_fn_to_value_fn(sarsa_q))
+
+    print(rows)
+    pd.DataFrame(rows).plot(x='lmbda', y='mse', kind='line')
+    plt.show()
 
 
 if __name__ == '__main__':
-    main(100_000)
+    compare_mse()
