@@ -3,15 +3,14 @@ from __future__ import division
 from __future__ import print_function
 
 from collections import defaultdict
-from random import choice, random
+from random import random
 
 import gym
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
-
-from mpl_toolkits.mplot3d import Axes3D
+import pandas as pd
 from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D
 
 
 class Agent(object):
@@ -95,11 +94,62 @@ class SarsaAgent(Agent):
         self.trace.clear()
 
 
+class CoarseCoding(object):
+
+    def __init__(self, player_buckets, dealer_buckets):
+        self.player_buckets = player_buckets
+        self.dealer_buckets = dealer_buckets
+        self.shape = (len(player_buckets), len(dealer_buckets), 2, 2)
+
+    def get_size(self):
+        return len(self.player_buckets) * len(self.dealer_buckets) * 2 * 2
+
+    def transform(self, state, action):
+        player, dealer, has_ace = state
+        result = np.zeros(self.shape, dtype=float)
+        player_idx = [i for i, (l, u) in enumerate(self.player_buckets) if l <= player <= u]
+        dealer_idx = [i for i, (l, u) in enumerate(self.dealer_buckets) if l <= dealer <= u]
+        ace_idx = 1 if has_ace else 0
+        action_idx = action
+        player_slice = slice(player_idx[0], player_idx[-1] + 1)
+        dealer_slice = slice(dealer_idx[0], dealer_idx[-1] + 1)
+        # print(player_idx, dealer_idx, ace_idx, action_idx)
+        result[player_slice, dealer_slice, ace_idx, action_idx] = 1
+        return result
+
+
+class FunctionalSarsaAgent(Agent):
+
+    def __init__(self, action_space, coding, lambda_, epsilon=0.05, discount=1.0, step_size=0.01):
+        self.action_space = action_space
+        self.coding = coding
+        self.lambda_ = lambda_
+        self.epsilon = epsilon
+        self.discount = discount
+        self.step_size = step_size
+        self.theta = np.zeros(self.coding.shape, dtype=np.float32)
+        self.trace = np.zeros(self.coding.shape, dtype=np.float32)
+
+    def next_action(self, state):
+        return self.action_space.sample() if random() < self.epsilon else (
+            max(range(self.action_space.n), key=lambda a: np.sum(self.theta * self.coding.transform(state, a))))
+
+    def observe_reward(self, reward, state, action, next_state, next_action):
+        w_t = self.coding.transform(state, action)
+        w_t_next = self.coding.transform(next_state, next_action)
+        td_error = reward + self.discount * np.sum(self.theta * w_t_next) - np.sum(self.theta * w_t)
+        self.trace = self.trace * self.discount * self.lambda_ + w_t
+        self.theta = self.theta + self.step_size * td_error * self.trace
+
+    def start_episode(self):
+        self.trace.fill(0)
+
+
 class AgentStats(object):
 
     def __init__(self):
-        self.value = defaultdict(lambda:0.0)
-        self.n = defaultdict(lambda:0)
+        self.value = defaultdict(lambda: 0.0)
+        self.n = defaultdict(lambda: 0)
 
     def increment(self, state, reward):
         player, dealer, _ = state
@@ -156,12 +206,14 @@ def run_agent(episode_count, agent_fn):
             state = next_state
             action = next_action
         agent.end_episode()
-    # plot_rewards(stats, max(episode_count / 1000, 1))
     plot_value_function(stats)
 
 
 def main(n):
-    run_agent(n, lambda action_space: SarsaAgent(action_space, 0.9))
+    coding = CoarseCoding([(1, 6), (4, 9), (7, 12), (10, 15), (13, 18), (16, 21), (22, 50)], [(1, 4), (4, 7), (7, 10)])
+    # run_agent(n, MonteCarloAgent)
+    # run_agent(n, lambda action_space: SarsaAgent(action_space, 0.9))
+    run_agent(n, lambda action_space: FunctionalSarsaAgent(action_space, coding, 0.9))
 
 
 if __name__ == '__main__':
